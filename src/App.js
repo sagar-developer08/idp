@@ -27,11 +27,29 @@ const countEntitiesByType = (entities) => {
   return counts;
 };
 
+// Helper to highlight text
+const HighlightedText = ({ text, highlight }) => {
+  if (!highlight || !text) return <span>{text}</span>;
+  
+  const parts = text.split(new RegExp(`(${highlight})`, 'gi'));
+  return (
+    <span>
+      {parts.map((part, i) => 
+        part.toLowerCase() === highlight.toLowerCase() ? (
+          <span key={i} className="highlighted-text">{part}</span>
+        ) : (
+          part
+        )
+      )}
+    </span>
+  );
+};
+
 function App() {
   const [documents, setDocuments] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isDragging, setIsDragging] = useState(false);
-  const [currentPage, setCurrentPage] = useState('listing'); // 'listing' or 'segmentation'
+  const [currentPage, setCurrentPage] = useState('listing'); // 'listing', 'segmentation', or 'results'
   const [selectedDocument, setSelectedDocument] = useState(null);
   const [activeTab, setActiveTab] = useState('Summary');
   const [currentDocPage, setCurrentDocPage] = useState(1);
@@ -39,6 +57,13 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [documentDetails, setDocumentDetails] = useState(null);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+  
+  // Search Results State
+  const [globalSearchQuery, setGlobalSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+
   const fileInputRef = useRef(null);
 
   // Fetch documents from API on mount
@@ -221,6 +246,17 @@ function App() {
     setSelectedDocument(null);
   };
 
+  const handleGoToResults = () => {
+    setCurrentPage('results');
+    setGlobalSearchQuery('');
+    setSearchResults([]);
+    setHasSearched(false);
+  };
+
+  const handleBackToSegmentation = () => {
+    setCurrentPage('segmentation');
+  };
+
   // Fetch document details from API
   const fetchDocumentDetails = async (documentId) => {
     setIsLoadingDetails(true);
@@ -240,6 +276,33 @@ function App() {
     setIsLoadingDetails(false);
   };
 
+  // Perform Global Search API Call
+  const performGlobalSearch = async () => {
+    if (!globalSearchQuery.trim()) return;
+    
+    setIsSearching(true);
+    try {
+      const response = await fetch(`http://54.161.174.24:8765/api/search?q=${globalSearchQuery}`, {
+        method: 'GET',
+        headers: {
+          'accept': 'application/json',
+        },
+      });
+      const data = await response.json();
+      
+      if (data && data.results) {
+        setSearchResults(data.results);
+      } else {
+        setSearchResults([]);
+      }
+    } catch (error) {
+      console.error('Search error:', error);
+      setSearchResults([]);
+    }
+    setIsSearching(false);
+    setHasSearched(true);
+  };
+
   const handleDocumentClick = (doc) => {
     setSelectedDocument(doc);
     setCurrentPage('segmentation');
@@ -247,7 +310,6 @@ function App() {
     setZoomLevel(100);
     setActiveTab('Summary');
     setDocumentDetails(null);
-    // Fetch document details when a document is selected
     if (doc.documentId) {
       fetchDocumentDetails(doc.documentId);
     }
@@ -268,34 +330,25 @@ function App() {
       };
     }
 
-    // Use documentDetails if available, otherwise use selectedDocument
     const segAccuracy = documentDetails?.segmentation_accuracy || selectedDocument.segmentationAccuracy || 0;
     const formattedSegAccuracy = segAccuracy < 1 ? (segAccuracy * 100).toFixed(2) : segAccuracy.toFixed(2);
     
-    // Get text accuracy from documentDetails
     const textAccuracy = documentDetails?.segmentation_output?.confidence_scores?.document_scores?.layout_score || 0;
     const formattedTextAccuracy = textAccuracy < 1 ? (textAccuracy * 100).toFixed(2) : textAccuracy.toFixed(2);
     
-    // Format extraction accuracy - convert to percentage if it's a decimal
     const extAccuracy = selectedDocument.extractionAccuracy || 0;
     const formattedExtAccuracy = extAccuracy < 1 ? (extAccuracy * 100).toFixed(2) : extAccuracy.toFixed(2);
 
-    // Get total pages from documentDetails
     const totalPages = documentDetails?.segmentation_output?.metadata?.num_pages || 1;
 
-    // Get summary from documentDetails (markdown format) - for Summary tab
     const summary = documentDetails?.document_summary || 
-      `This document "${selectedDocument.name}" has been processed and analyzed. ${selectedDocument.status === 'Processed' ? 'The document has been successfully processed and segmented.' : 'The document is currently being processed.'}`;
+      `This document "${selectedDocument.name}" has been processed.`;
 
-    // Get markdown text from documentDetails - for Text tab
     const extractedText = documentDetails?.segmentation_output?.metadata?.additional_info?.markdown || 
       documentDetails?.segmentation_output?.extracted_text || '';
 
-    // Get tables data from documentDetails - for Tables tab
     const tablesData = documentDetails?.segmentation_output?.tables_data || [];
 
-    // Get entities from documentDetails - for Entities tab
-    // Check multiple possible locations for entities
     const entities = documentDetails?.entities || 
                      documentDetails?.segmentation_output?.entities || 
                      documentDetails?.named_entities || 
@@ -320,28 +373,132 @@ function App() {
     };
   };
 
-  if (currentPage === 'segmentation') {
-    const docData = getDocumentData();
-    
+  // --- RENDER: RESULTS PAGE ---
+  if (currentPage === 'results') {
     return (
       <div className="app">
         {/* Header */}
         <header className="header">
           <h1>Dhira | IndiaAI IDP Platform</h1>
-          
-          {/* Step Navigation */}
+          <div className="step-nav">
+            <button className="step-btn" onClick={handleBackToListing}>1. Data Listing</button>
+            <ArrowRight size={16} className="arrow-icon" />
+            <button className="step-btn" onClick={handleBackToSegmentation}>2. Segmentation</button>
+            <ArrowRight size={16} className="arrow-icon" />
+            <button className="step-btn active">3. Results</button>
+          </div>
+        </header>
+
+        <main className="results-main">
+          <button className="back-btn" onClick={handleBackToSegmentation} style={{marginBottom: '20px'}}>
+            <ArrowLeft size={16} />
+            Back to Segmentation
+          </button>
+
+          <div className="results-header">
+            <h2>Document Search</h2>
+            <p>Search across all processed documents and sections</p>
+          </div>
+
+          <div className="results-search-container">
+            <div className="search-input-wrapper" style={{width: '100%'}}>
+              <Search className="search-icon" />
+              <input
+                type="text"
+                placeholder="खोजें / Search documents..."
+                value={globalSearchQuery}
+                onChange={(e) => setGlobalSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && performGlobalSearch()}
+                className="search-input"
+              />
+            </div>
+            <button className="mic-btn">
+              <Mic className="mic-icon" />
+            </button>
+            <button className="search-btn" onClick={performGlobalSearch}>
+              {isSearching ? '...' : 'Search'}
+            </button>
+          </div>
+
+          {/* Results List */}
+          <div className="search-results-list">
+            {!hasSearched && !isSearching ? (
+              <div className="empty-search-state">
+                <FileText size={64} className="empty-search-icon" strokeWidth={1} />
+                <p>Enter a keyword to search across all processed documents.</p>
+              </div>
+            ) : searchResults.length > 0 ? (
+              searchResults.map((result) => (
+                <div key={result.document_id} className="search-result-card">
+                  <div className="result-card-header">
+                    <div className="result-doc-info">
+                      <div className="result-doc-icon">
+                        <FileText size={24} />
+                      </div>
+                      <div className="result-doc-meta">
+                        <h4>{result.document_name}</h4>
+                        <span className="meta-subtitle">Certificate : Title/Name</span>
+                        <span className="meta-time">
+                          Time Uploaded: {new Date(result.created_timestamp).toLocaleString()}
+                        </span>
+                        <span className="meta-time">
+                          Processed on: {new Date(result.created_timestamp).toLocaleDateString()}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="result-accuracy">
+                      Accuracy 97%
+                    </div>
+                  </div>
+
+                  <span className="result-section-label">
+                    Result Context (Summary):
+                  </span>
+                  
+                  <div className="result-snippet">
+                    <HighlightedText 
+                      text={result.document_summary || "No summary available."} 
+                      highlight={globalSearchQuery} 
+                    />
+                  </div>
+
+                  <button 
+                    className="copy-result-btn"
+                    onClick={() => navigator.clipboard.writeText(result.document_summary)}
+                  >
+                    <Copy size={14} /> Copy Text
+                  </button>
+                </div>
+              ))
+            ) : (
+              <div className="empty-search-state">
+                <p>No results found for "{globalSearchQuery}"</p>
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // --- RENDER: SEGMENTATION PAGE ---
+  if (currentPage === 'segmentation') {
+    const docData = getDocumentData();
+    
+    return (
+      <div className="app">
+        <header className="header">
+          <h1>Dhira | IndiaAI IDP Platform</h1>
           <div className="step-nav">
             <button className="step-btn" onClick={handleBackToListing}>1. Data Listing</button>
             <ArrowRight size={16} className="arrow-icon" />
             <button className="step-btn active">2. Segmentation</button>
             <ArrowRight size={16} className="arrow-icon" />
-            <button className="step-btn inactive">3. Results</button>
+            <button className="step-btn inactive" onClick={handleGoToResults}>3. Results</button>
           </div>
         </header>
 
-        {/* Segmentation Content */}
         <main className="segmentation-content">
-          {/* Top Bar */}
           <div className="segmentation-topbar">
             <button className="back-btn" onClick={handleBackToListing}>
               <ArrowLeft size={16} />
@@ -365,7 +522,6 @@ function App() {
               <button className="search-btn">Search</button>
             </div>
 
-            {/* Tabs */}
             <div className="segmentation-tabs">
               {['Summary', 'Text', 'Tables', 'Entities'].map(tab => (
                 <button
@@ -379,7 +535,6 @@ function App() {
             </div>
           </div>
 
-          {/* Main Segmentation Area */}
           <div className="segmentation-main">
             {/* Left Panel - Document Preview */}
             <div className="document-preview-panel">
@@ -400,14 +555,10 @@ function App() {
 
               <div className="document-preview-area">
                 {(() => {
-                  // Check if document is an image file
                   const docName = selectedDocument?.name || '';
                   const isImage = /\.(jpg|jpeg|png|gif|bmp|tiff|tif|webp)$/i.test(docName);
-                  
                   if (isImage) {
-                    // Get image from public folder
                     const imagePath = `/${docName}`;
-                    
                     return (
                       <div className="image-preview-container">
                         <img 
@@ -419,35 +570,21 @@ function App() {
                             transformOrigin: 'center center'
                           }}
                           onError={(e) => {
-                            // Fallback to placeholder if image fails to load
                             e.target.style.display = 'none';
                             const placeholder = e.target.parentElement.querySelector('.doc-placeholder');
-                            if (placeholder) {
-                              placeholder.style.display = 'flex';
-                            }
+                            if (placeholder) placeholder.style.display = 'flex';
                           }}
                         />
                         <div className="doc-placeholder" style={{ display: 'none' }}>
                           <FileText size={64} strokeWidth={1} />
-                          {docName && (
-                            <p style={{ marginTop: '1rem', color: '#718096', fontSize: '0.875rem' }}>
-                              {docName}
-                            </p>
-                          )}
                         </div>
                       </div>
                     );
                   }
-                  
-                  // Default placeholder for non-image documents
                   return (
                     <div className="doc-placeholder">
                       <FileText size={64} strokeWidth={1} />
-                      {docName && (
-                        <p style={{ marginTop: '1rem', color: '#718096', fontSize: '0.875rem' }}>
-                          {docName}
-                        </p>
-                      )}
+                      {docName && <p style={{ marginTop: '1rem', color: '#718096' }}>{docName}</p>}
                     </div>
                   );
                 })()}
@@ -475,23 +612,15 @@ function App() {
             {/* Right Panel - Tab Content */}
             <div className="extraction-panel">
               {isLoadingDetails ? (
-                <div className="loading-state">
-                  <p>Loading document details...</p>
-                </div>
+                <div className="loading-state"><p>Loading document details...</p></div>
               ) : (
                 <>
                   {activeTab === 'Summary' && (
                     <div className="ai-summary-card">
                       <div className="summary-header">
                         <h3>AI Generated Summary</h3>
-                        <button 
-                          className="copy-btn"
-                          onClick={() => {
-                            navigator.clipboard.writeText(docData.summary);
-                          }}
-                        >
-                          <Copy size={14} />
-                          Copy
+                        <button className="copy-btn" onClick={() => navigator.clipboard.writeText(docData.summary)}>
+                          <Copy size={14} /> Copy
                         </button>
                       </div>
                       <p className="confidence-score">Confidence Score <span>{docData.confidenceScore}%</span></p>
@@ -508,22 +637,12 @@ function App() {
                           <span>Text Accuracy</span>
                           <span className="accuracy-value">{docData.textAccuracy}%</span>
                         </div>
-                        <button 
-                          className="copy-btn"
-                          onClick={() => {
-                            navigator.clipboard.writeText(docData.extractedText);
-                          }}
-                        >
-                          <Copy size={14} />
-                          Copy
+                        <button className="copy-btn" onClick={() => navigator.clipboard.writeText(docData.extractedText)}>
+                          <Copy size={14} /> Copy
                         </button>
                       </div>
                       <div className="extracted-text-content markdown-content">
-                        {docData.extractedText ? (
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{docData.extractedText}</ReactMarkdown>
-                        ) : (
-                          <p style={{ color: '#718096' }}>No text extracted yet.</p>
-                        )}
+                        {docData.extractedText ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{docData.extractedText}</ReactMarkdown> : <p style={{ color: '#718096' }}>No text extracted yet.</p>}
                       </div>
                     </div>
                   )}
@@ -534,57 +653,28 @@ function App() {
                       {docData.tablesData && docData.tablesData.length > 0 ? (
                         <div className="tables-container">
                           {docData.tablesData.map((table, tableIndex) => {
-                            // Get headers from the first row's keys
-                            const headers = table.data && table.data.length > 0 
-                              ? Object.keys(table.data[0]) 
-                              : [];
-                            
+                            const headers = table.data && table.data.length > 0 ? Object.keys(table.data[0]) : [];
                             return (
                               <div key={tableIndex} className="table-wrapper">
                                 <div className="table-header-info">
                                   <span className="table-number">Table {tableIndex + 1}</span>
-                                  {table.page && (
-                                    <span className="table-page">Page {table.page}</span>
-                                  )}
-                                  {table.confidence !== null && table.confidence !== undefined && (
-                                    <span className="table-confidence">
-                                      Confidence: {(table.confidence * 100).toFixed(2)}%
-                                    </span>
-                                  )}
+                                  {table.confidence && <span className="table-confidence">Confidence: {(table.confidence * 100).toFixed(2)}%</span>}
                                 </div>
-                                {headers.length > 0 ? (
+                                {headers.length > 0 && (
                                   <table className="data-table">
-                                    <thead>
-                                      <tr>
-                                        {headers.map((header, idx) => (
-                                          <th key={idx}>{header}</th>
-                                        ))}
-                                      </tr>
-                                    </thead>
+                                    <thead><tr>{headers.map((h, i) => <th key={i}>{h}</th>)}</tr></thead>
                                     <tbody>
-                                      {table.data.map((row, rowIndex) => (
-                                        <tr key={rowIndex}>
-                                          {headers.map((header, colIndex) => (
-                                            <td key={colIndex}>
-                                              {row[header] || ''}
-                                            </td>
-                                          ))}
-                                        </tr>
+                                      {table.data.map((row, rI) => (
+                                        <tr key={rI}>{headers.map((h, cI) => <td key={cI}>{row[h]}</td>)}</tr>
                                       ))}
                                     </tbody>
                                   </table>
-                                ) : (
-                                  <p style={{ color: '#718096', padding: '1rem' }}>
-                                    No table data available
-                                  </p>
                                 )}
                               </div>
                             );
                           })}
                         </div>
-                      ) : (
-                        <p style={{ color: '#718096' }}>No tables found in this document.</p>
-                      )}
+                      ) : <p style={{ color: '#718096' }}>No tables found.</p>}
                     </div>
                   )}
 
@@ -592,63 +682,37 @@ function App() {
                     <div className="entities-content-card">
                       <div className="entities-header">
                         <h3>Named entities recognized</h3>
-                        <button 
-                          className="copy-btn"
-                          onClick={() => {
-                            const entitiesText = docData.entities.map(e => 
-                              `${e.type || e.entity_type}: ${e.value || e.text} (${((e.confidence || 0) * 100).toFixed(0)}%)`
-                            ).join('\n');
-                            navigator.clipboard.writeText(entitiesText);
-                          }}
-                        >
-                          <Copy size={14} />
-                          Copy
-                        </button>
+                        <button className="copy-btn" onClick={() => {
+                          const t = docData.entities.map(e => `${e.type}: ${e.value}`).join('\n');
+                          navigator.clipboard.writeText(t);
+                        }}><Copy size={14} /> Copy</button>
                       </div>
-                      
                       {docData.entities && docData.entities.length > 0 ? (
                         <>
-                          {/* Entity Count Summary */}
                           <div className="entity-count-summary">
                             {Object.entries(countEntitiesByType(docData.entities)).map(([type, count]) => (
-                              <span key={type} className="entity-count-badge">
-                                {type}: {count} x
-                              </span>
+                              <span key={type} className="entity-count-badge">{type}: {count} x</span>
                             ))}
                           </div>
-
-                          {/* Entity Cards */}
                           <div className="entities-list">
                             {docData.entities.map((entity, index) => {
                               const EntityIcon = getEntityIcon(entity.type || entity.entity_type);
-                              const entityType = entity.type || entity.entity_type || 'Unknown';
-                              const entityValue = entity.value || entity.text || entity.name || '';
-                              const confidence = entity.confidence !== undefined 
-                                ? (entity.confidence < 1 ? entity.confidence * 100 : entity.confidence)
-                                : 95; // Default confidence
-                              
                               return (
                                 <div key={index} className="entity-card">
-                                  <div className="entity-icon-wrapper">
-                                    <EntityIcon size={20} />
-                                  </div>
+                                  <div className="entity-icon-wrapper"><EntityIcon size={20} /></div>
                                   <div className="entity-content">
-                                    <div className="entity-type">{entityType}</div>
-                                    <div className="entity-value">{entityValue}</div>
+                                    <div className="entity-type">{entity.type || entity.entity_type}</div>
+                                    <div className="entity-value">{entity.value || entity.text}</div>
                                   </div>
-                                  <div className="entity-confidence">{confidence.toFixed(0)}%</div>
                                 </div>
                               );
                             })}
                           </div>
                         </>
-                      ) : (
-                        <p style={{ color: '#718096' }}>No entities found in this document.</p>
-                      )}
+                      ) : <p style={{ color: '#718096' }}>No entities found.</p>}
                     </div>
                   )}
 
-                  {/* Key Extracted Fields - Show only on Summary tab */}
                   {activeTab === 'Summary' && (
                     <>
                       <div className="extracted-fields-card">
@@ -662,7 +726,10 @@ function App() {
                           ))}
                         </div>
                       </div>
-                      <button className="search-results-btn">Search Results</button>
+                      {/* Search Results Button triggering the new page */}
+                      <button className="search-results-btn" onClick={handleGoToResults}>
+                        Search Results
+                      </button>
                     </>
                   )}
                 </>
@@ -674,23 +741,20 @@ function App() {
     );
   }
 
+  // --- RENDER: LISTING PAGE (Default) ---
   return (
     <div className="app">
-      {/* Header */}
       <header className="header">
         <h1>Dhira | IndiaAI IDP Platform</h1>
-        
-        {/* Step Navigation */}
         <div className="step-nav">
           <button className="step-btn active">1. Data Listing</button>
           <ArrowRight size={16} className="arrow-icon" />
           <button className="step-btn current" onClick={handleSegmentationClick}>2. Segmentation</button>
           <ArrowRight size={16} className="arrow-icon" />
-          <button className="step-btn inactive">3. Results</button>
+          <button className="step-btn inactive" onClick={handleGoToResults}>3. Results</button>
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="main-content">
         {/* Upload Area */}
         <div
@@ -701,12 +765,8 @@ function App() {
         >
           <div className="upload-content">
             <Upload className="upload-icon" strokeWidth={1.5} />
-            <p className="upload-text">
-              Drag your documents here or click to upload
-            </p>
-            <button onClick={handleBrowseClick} className="browse-btn">
-              Browse Files
-            </button>
+            <p className="upload-text">Drag your documents here or click to upload</p>
+            <button onClick={handleBrowseClick} className="browse-btn">Browse Files</button>
             <p className="file-types">PDF, JPG, JPEG, PNG, TIFF</p>
             <input
               ref={fileInputRef}
@@ -721,18 +781,12 @@ function App() {
 
         {/* Document Listing Section */}
         <div className="document-section">
-          {/* Left Section - Document List */}
           <div className="document-list">
             <div className="document-header">
               <h2>Document Listing</h2>
-              
               {documents.length > 0 && (
-                <button className="delete-all-btn" onClick={handleDeleteAll}>
-                  Delete all
-                </button>
+                <button className="delete-all-btn" onClick={handleDeleteAll}>Delete all</button>
               )}
-              
-              {/* Search Bar */}
               <div className="search-container">
                 <div className="search-input-wrapper">
                   <Search className="search-icon" />
@@ -744,14 +798,11 @@ function App() {
                     className="search-input"
                   />
                 </div>
-                <button className="mic-btn">
-                  <Mic className="mic-icon" />
-                </button>
+                <button className="mic-btn"><Mic className="mic-icon" /></button>
                 <button className="search-btn">Search</button>
               </div>
             </div>
 
-            {/* Document Cards or Empty State */}
             {documents.length === 0 ? (
               <div className="empty-state">
                 <FileText className="empty-icon" strokeWidth={1} />
@@ -767,15 +818,9 @@ function App() {
                     style={{ cursor: 'pointer' }}
                   >
                     <div className="doc-info-row">
-                      <div className="doc-icon">
-                        <FileText size={24} />
-                      </div>
+                      <div className="doc-icon"><FileText size={24} /></div>
                       <div className="doc-details">
-                        <a 
-                          href="#" 
-                          className="doc-name" 
-                          onClick={(e) => { e.preventDefault(); handleDocumentClick(doc); }}
-                        >
+                        <a href="#" className="doc-name" onClick={(e) => { e.preventDefault(); handleDocumentClick(doc); }}>
                           {doc.name}
                         </a>
                         <div className="doc-meta">
@@ -785,10 +830,7 @@ function App() {
                       </div>
                       <button 
                         className="doc-delete-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteDocument(doc.id);
-                        }}
+                        onClick={(e) => { e.stopPropagation(); handleDeleteDocument(doc.id); }}
                       >
                         <X size={14} />
                       </button>
@@ -798,40 +840,27 @@ function App() {
                       </div>
                       <div className="doc-accuracy">
                         <span>Extraction Accuracy : </span>
-                        <span className="accuracy-value">
-                          {doc.extractionAccuracy < 1 
-                            ? (doc.extractionAccuracy * 100).toFixed(2) 
-                            : doc.extractionAccuracy.toFixed(2)}%
-                        </span>
+                        <span className="accuracy-value">{doc.extractionAccuracy.toFixed(2)}%</span>
                       </div>
                       <div className="doc-accuracy">
                         <span>Segmentation Accuracy : </span>
-                        <span className="accuracy-value">
-                          {doc.segmentationAccuracy < 1 
-                            ? (doc.segmentationAccuracy * 100).toFixed(2) 
-                            : doc.segmentationAccuracy.toFixed(2)}%
-                        </span>
+                        <span className="accuracy-value">{doc.segmentationAccuracy.toFixed(2)}%</span>
                       </div>
                     </div>
                     <div className="doc-progress-row">
                       <span className="progress-percent">{Math.round(doc.progress)}%</span>
                       <div className="progress-bar">
-                        <div 
-                          className="progress-fill" 
-                          style={{ width: `${doc.progress}%` }}
-                        ></div>
+                        <div className="progress-fill" style={{ width: `${doc.progress}%` }}></div>
                       </div>
                     </div>
-                    <div className="doc-progress-time">
-                      {getProgressTime(doc.progress)}
-                    </div>
+                    <div className="doc-progress-time">{getProgressTime(doc.progress)}</div>
                   </div>
                 ))}
               </div>
             )}
           </div>
 
-          {/* Right Section - Stats */}
+          {/* Stats Panel */}
           <div className="stats-panel">
             {documents.length === 0 ? (
               <h3>Upload documents to begin extraction and segmentation</h3>
@@ -844,10 +873,7 @@ function App() {
                 <div className="progress-bar-container">
                   <span className="progress-percent-small">{overallExtractionProgress}%</span>
                   <div className="progress-bar small">
-                    <div 
-                      className="progress-fill green" 
-                      style={{ width: `${overallExtractionProgress}%` }}
-                    ></div>
+                    <div className="progress-fill green" style={{ width: `${overallExtractionProgress}%` }}></div>
                   </div>
                 </div>
 
@@ -858,15 +884,11 @@ function App() {
                 <div className="progress-bar-container">
                   <span className="progress-percent-small">{overallSegmentationProgress}%</span>
                   <div className="progress-bar small">
-                    <div 
-                      className="progress-fill blue" 
-                      style={{ width: `${overallSegmentationProgress}%` }}
-                    ></div>
+                    <div className="progress-fill blue" style={{ width: `${overallSegmentationProgress}%` }}></div>
                   </div>
                 </div>
               </>
             )}
-            
             <div className="stat-item">
               <span className="stat-label">Total Documents : </span>
               <span>{totalDocs}</span>
